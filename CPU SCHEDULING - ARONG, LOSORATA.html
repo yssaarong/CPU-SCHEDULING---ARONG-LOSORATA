@@ -463,84 +463,104 @@
       scheduleNext();
     }
 
-    function runSJF(processes, contextSwitchDelay) {
-      const gantt = document.getElementById("ganttChart");
-      const current = document.getElementById("currentProcessBar");
-      const outputTable = document.querySelector("#outputTable tbody");
-      let time = 0;
-      let completed = 0;
-      let totalTAT = 0;
-      let totalRT = 0;
-      let n = processes.length;
-      let isDone = Array(n).fill(false);
-      let results = [];
-      function scheduleNext() {
-        if (simulationStopped) return;
-        let idx = -1;
-        let minBT = Infinity;
-        for (let i = 0; i < n; i++) {
-          if (!isDone[i] && processes[i].at <= time && processes[i].bt < minBT) {
-            minBT = processes[i].bt;
-            idx = i;
-          }
-        }
-        if (idx === -1) {
-          if (completed === n) {
-            document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
-            document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
-            lastSimulationData = {
-              gantt: gantt.innerHTML,
-              table: results,
-              avgTAT: (totalTAT / n).toFixed(2),
-              avgRT: (totalRT / n).toFixed(2)
-            };
-            return;
-          }
-          time++;
-          setTimeout(scheduleNext, 500);
-          return;
-        }
-        const p = processes[idx];
-        const startTime = Math.max(time, p.at);
-        const endTime = startTime + p.bt;
-        p.ct = endTime;
-        p.startTime = startTime;
-        const tat = p.ct - p.at;
-        const rt = p.startTime - p.at;
-        totalTAT += tat;
-        totalRT += rt;
-        isDone[idx] = true;
-        completed++;
-        addGanttBlock(gantt, p.pid, p.bt, endTime);
-        logExec(`Process ${p.pid} started at time ${startTime}, completed at ${endTime}`);
-        current.innerHTML = "";
-        const label = document.createElement("div");
-        label.className = "bar-label";
-        label.textContent = p.pid;
-        const bar = document.createElement("div");
-        bar.className = "bar";
-        bar.textContent = p.pid;
-        current.appendChild(label);
-        current.appendChild(bar);
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${p.pid}</td>
-          <td>${p.at}</td>
-          <td>${p.bt}</td>
-          <td>${p.ct}</td>
-          <td>${tat}</td>
-          <td>${rt}</td>
-        `;
-        outputTable.appendChild(row);
-        results.push({pid: p.pid, at: p.at, bt: p.bt, ct: p.ct, tat, rt});
-        time = endTime;
-        if (completed < n) { // Only add delay if not all processes are done
-          time += contextSwitchDelay / 1000;
-        }
-        setTimeout(scheduleNext, 1000 + contextSwitchDelay);
+  function runSJF(processes, contextSwitchDelay) {
+  const gantt = document.getElementById("ganttChart");
+  const current = document.getElementById("currentProcessBar");
+  const outputTable = document.querySelector("#outputTable tbody");
+
+  let time = 0;
+  let completed = 0;
+  let totalTAT = 0;
+  let totalRT = 0;
+  const n = processes.length;
+  let isDone = Array(n).fill(false);
+  let results = [];
+
+  function scheduleNext() {
+    if (simulationStopped) return;
+
+    let idx = -1;
+    let minBT = Infinity;
+
+    // Find the shortest job among those that have arrived
+    for (let i = 0; i < n; i++) {
+      if (!isDone[i] && processes[i].at <= time && processes[i].bt < minBT) {
+        minBT = processes[i].bt;
+        idx = i;
       }
-      scheduleNext();
     }
+
+    // If no process is ready, just wait (no idle block)
+if (idx === -1) {
+  time++;
+  setTimeout(scheduleNext, 500);
+  return;
+}
+
+    const p = processes[idx];
+    const startTime = time;
+    const endTime = startTime + p.bt;
+
+    // Compute results
+    p.ct = endTime;
+    p.startTime = startTime;
+    const tat = p.ct - p.at;
+    const rt = p.startTime - p.at;
+    totalTAT += tat;
+    totalRT += rt;
+    isDone[idx] = true;
+    completed++;
+
+    // Draw Gantt chart
+    addGanttBlock(gantt, p.pid, p.bt, endTime);
+    logExec(`Process ${p.pid} started at time ${startTime}, completed at ${endTime}`);
+
+    // Update current process bar
+    current.innerHTML = "";
+    const label = document.createElement("div");
+    label.className = "bar-label";
+    label.textContent = p.pid;
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.textContent = p.pid;
+    current.appendChild(label);
+    current.appendChild(bar);
+
+    // Output table
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${p.pid}</td>
+      <td>${p.at}</td>
+      <td>${p.bt}</td>
+      <td>${p.ct}</td>
+      <td>${tat}</td>
+      <td>${rt}</td>
+    `;
+    outputTable.appendChild(row);
+    results.push({ pid: p.pid, at: p.at, bt: p.bt, ct: p.ct, tat, rt });
+
+    // Move time and continue
+    time = endTime;
+    if (completed < n) {
+      time += contextSwitchDelay / 1000;
+    }
+
+    if (completed === n) {
+      document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
+      document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
+      lastSimulationData = {
+        gantt: gantt.innerHTML,
+        table: results,
+        avgTAT: (totalTAT / n).toFixed(2),
+        avgRT: (totalRT / n).toFixed(2)
+      };
+    } else {
+      setTimeout(scheduleNext, 1000 + contextSwitchDelay);
+    }
+  }
+
+  scheduleNext();
+}
 
     function runSRTF(processes, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
