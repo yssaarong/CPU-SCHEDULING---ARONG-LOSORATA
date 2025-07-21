@@ -73,23 +73,61 @@
     }
     .gantt-chart-box {
       background-color: #1e345d;
-      padding: 10px;
+      padding: 10px 10px 30px 10px; /* Extra bottom padding for time labels */
       border-radius: 5px;
       border: 1px solid #ff69b4;
       margin-top: 20px;
-      height: 60px;
+      height: 80px;
+      width: 1200px; /* Fixed width for the Gantt Chart */
+      max-width: 1200px;
       overflow-x: auto;
+      overflow-y: hidden;
       white-space: nowrap;
       color: #ffb6c1;
+      box-sizing: border-box;
+      position: relative;
     }
     .gantt-bar {
       display: inline-block;
-      background-color: #ff69b4;
+      background-color: #ff69b4; /* Default, will be overridden inline */
       color: #0a1a3b;
       padding: 5px 8px;
       margin-right: 2px;
       border-radius: 3px;
       font-weight: bold;
+      min-width: 60px;
+      box-sizing: border-box;
+      text-align: center;
+      white-space: nowrap;
+      vertical-align: middle;
+      position: relative;
+    }
+    .gantt-time-label {
+      position: absolute;
+      bottom: 0;
+      font-size: 13px;
+      color: #ffd700;
+      font-weight: bold;
+      white-space: nowrap;
+      transform: none;
+      pointer-events: none;
+      text-align: right;
+    }
+    .gantt-bar-wrapper {
+      display: inline-block;
+      position: relative;
+      vertical-align: top;
+      height: 100%;
+      min-width: 60px;
+      box-sizing: border-box;
+    }
+    .gantt-chart-box::-webkit-scrollbar {
+      height: 8px;
+      background: #13294b;
+    }
+    .gantt-chart-box::-webkit-scrollbar-thumb {
+      background: #ff69b4;
+      border-radius: 4px;
     }
     .current-process-bar {
       margin-top: 20px;
@@ -115,6 +153,14 @@
       gap: 20px;
       align-items: center;
       color: #ffb6c1;
+    }
+    .gantt-box {
+      min-width: 60px; /* Adjust based on max label length */
+      padding: 4px 8px;
+      white-space: nowrap;
+      overflow: visible;
+      text-align: center;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -165,6 +211,19 @@
           <button class="btn" onclick="stopSimulation()">Stop</button>
           <button class="btn" onclick="resetSimulation()">Start another Simulation</button>
         </div>
+        <div style="margin-top: 15px;">
+          <label>Context Switch Delay (ms):</label>
+          <input type="number" id="contextSwitchDelay" placeholder="e.g. 200" value="0" min="0" style="width: 120px; display: inline-block;">
+        </div>
+        <div style="margin-top: 15px;">
+          <label>Export Results:</label>
+          <select id="exportFormat">
+            <option value="csv">CSV</option>
+            <option value="txt">Plain Text</option>
+            <option value="img">Image (Gantt Chart)</option>
+          </select>
+          <button class="btn" onclick="exportResults()">Export</button>
+        </div>
       </div>
 
       <div style="flex: 1 1 45%">
@@ -191,10 +250,14 @@
 
   <script>
     let simulationStopped = false;
-    const ganttColors = [
-      "#ff69b4", "#4b8cf5", "#ffd700", "#32cd32", "#ff4500", "#8a2be2", "#00ced1", "#ff6347", "#20b2aa", "#ffa500"
-    ];
+    let lastSimulationData = null; // Store last simulation results for export
+    let storedRandomValues = []; // Store random values to prevent changes
     function getColorForPID(pid) {
+      // Assign a distinct color for each PID using a color palette
+      const ganttColors = [
+        "#ff69b4", "#4b8cf5", "#ffd700", "#32cd32", "#ff4500", "#8a2be2", "#00ced1", "#ff6347", "#20b2aa", "#ffa500",
+        "#e75480", "#4682b4", "#bada55", "#e9967a", "#9932cc", "#40e0d0", "#ffb347", "#b22222", "#5f9ea0", "#ff7f50"
+      ];
       const num = parseInt(pid.replace(/\D/g, "")) || 0;
       return ganttColors[(num - 1) % ganttColors.length];
     }
@@ -209,11 +272,31 @@
       const tbody = document.querySelector("#inputTable tbody");
       tbody.innerHTML = "";
       const num = parseInt(document.getElementById("numProcesses").value) || 0;
+      
+      // Generate new random values only if switching to random mode or if values don't exist
+      if (type === "random" && (storedRandomValues.length !== num || storedRandomValues.length === 0)) {
+        storedRandomValues = [];
+        for (let i = 0; i < num; i++) {
+          storedRandomValues.push({
+            at: Math.floor(Math.random() * 10),
+            bt: Math.floor(Math.random() * 10) + 1
+          });
+        }
+      }
+      
       for (let i = 0; i < num; i++) {
         const row = document.createElement("tr");
         const pid = "P" + (i + 1);
-        const at = type === "random" ? Math.floor(Math.random() * 10) : "";
-        const bt = type === "random" ? Math.floor(Math.random() * 10) + 1 : "";
+        let at, bt;
+        
+        if (type === "random") {
+          at = storedRandomValues[i] ? storedRandomValues[i].at : 0;
+          bt = storedRandomValues[i] ? storedRandomValues[i].bt : 1;
+        } else {
+          at = "";
+          bt = "";
+        }
+        
         row.innerHTML = `
           <td><input type="text" value="${pid}" disabled></td>
           <td><input type="number" value="${at}" ${type === "manual" ? "" : "disabled"}></td>
@@ -225,6 +308,7 @@
 
     function runSimulation() {
       simulationStopped = false;
+      lastSimulationData = null;
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const execLog = document.getElementById("execLog");
@@ -248,16 +332,17 @@
 
       processes.sort((a, b) => a.at - b.at);
       const algorithm = document.getElementById("algorithm").value;
+      const contextSwitchDelay = parseInt(document.getElementById("contextSwitchDelay").value) || 0;
 
       if (algorithm === "fcfs") {
-        runFCFS(processes);
+        runFCFS(processes, contextSwitchDelay);
       } else if (algorithm === "sjf") {
-        runSJF(processes);
+        runSJF(processes, contextSwitchDelay);
       } else if (algorithm === "srtf") {
-        runSRTF(processes);
+        runSRTF(processes, contextSwitchDelay);
       } else if (algorithm === "rr") {
         const quantum = parseInt(document.getElementById("rrQuantum").value) || 1;
-        runRR(processes, quantum);
+        runRR(processes, quantum, contextSwitchDelay);
       } else if (algorithm === "mlfq") {
         const q0 = parseInt(document.getElementById("q0").value) || 2;
         const q1 = parseInt(document.getElementById("q1").value) || 4;
@@ -267,13 +352,46 @@
         const a1 = parseInt(document.getElementById("a1").value) || q1;
         const a2 = parseInt(document.getElementById("a2").value) || q2;
         const a3 = parseInt(document.getElementById("a3").value) || q3;
-        runMLFQ(processes, [q0, q1, q2, q3], [a0, a1, a2, a3]);
+        runMLFQ(processes, [q0, q1, q2, q3], [a0, a1, a2, a3], contextSwitchDelay);
       } else {
         alert("Unknown algorithm selected.");
       }
     }
 
-    function runFCFS(processes) {
+    function addGanttBlock(gantt, pid, bt, endTime, queueLabel) {
+      const ganttWrapper = document.createElement("div");
+      ganttWrapper.className = "gantt-bar-wrapper";
+      // Calculate width: proportional to burst time, but at least enough for label
+      const label = queueLabel ? pid + queueLabel : pid;
+      const charWidth = 10; // px per character (approx)
+      const minWidth = Math.max(60, label.length * charWidth + 20); // 20px padding
+      const width = Math.max(bt * 30, minWidth);
+      ganttWrapper.style.width = width + "px";
+      ganttWrapper.style.position = "relative";
+      ganttWrapper.style.display = "inline-block";
+      ganttWrapper.style.verticalAlign = "top";
+      const ganttBlock = document.createElement("div");
+      ganttBlock.className = "gantt-bar";
+      ganttBlock.textContent = label;
+      ganttBlock.style.backgroundColor = pid === 'IDLE' ? '#444' : getColorForPID(pid);
+      ganttBlock.style.width = "100%";
+      ganttWrapper.appendChild(ganttBlock);
+      // Time label at right edge, below the block
+      const timeLabel = document.createElement("div");
+      timeLabel.className = "gantt-time-label";
+      timeLabel.textContent = endTime;
+      timeLabel.style.right = "0";
+      timeLabel.style.left = "auto";
+      timeLabel.style.width = "max-content";
+      timeLabel.style.position = "absolute";
+      timeLabel.style.bottom = "-18px";
+      timeLabel.style.transform = "none";
+      timeLabel.style.textAlign = "right";
+      ganttWrapper.appendChild(timeLabel);
+      gantt.appendChild(ganttWrapper);
+    }
+
+    function runFCFS(processes, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const outputTable = document.querySelector("#outputTable tbody");
@@ -282,6 +400,7 @@
       let queue = [];
       let totalTAT = 0;
       let totalRT = 0;
+      let results = [];
       function scheduleNext() {
         if (simulationStopped) return;
         while (index < processes.length && processes[index].at <= time) {
@@ -296,23 +415,24 @@
         if (queue.length === 0 && index >= processes.length) {
           document.getElementById("avgTAT").textContent = (totalTAT / processes.length).toFixed(2);
           document.getElementById("avgRT").textContent = (totalRT / processes.length).toFixed(2);
+          lastSimulationData = {
+            gantt: gantt.innerHTML,
+            table: results,
+            avgTAT: (totalTAT / processes.length).toFixed(2),
+            avgRT: (totalRT / processes.length).toFixed(2)
+          };
           return;
         }
         const p = queue.shift();
         const startTime = time;
         const endTime = time + p.bt;
         p.ct = endTime;
-        p.startTime = startTime; // Store the actual start time
+        p.startTime = startTime;
         const tat = p.ct - p.at;
         const rt = p.startTime - p.at;
         totalTAT += tat;
         totalRT += rt;
-        const ganttBlock = document.createElement("div");
-        ganttBlock.className = "gantt-bar";
-        ganttBlock.textContent = p.pid;
-        ganttBlock.style.backgroundColor = getColorForPID(p.pid);
-        ganttBlock.style.width = (p.bt * 30) + "px";
-        gantt.appendChild(ganttBlock);
+        addGanttBlock(gantt, p.pid, p.bt, endTime);
         logExec(`Process ${p.pid} started at time ${startTime}, completed at ${endTime}`);
         current.innerHTML = "";
         const label = document.createElement("div");
@@ -324,15 +444,26 @@
         current.appendChild(label);
         current.appendChild(bar);
         const row = document.createElement("tr");
-        row.innerHTML = `<td>${p.pid}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.ct}</td><td>${tat}</td><td>${rt}</td>`;
+        row.innerHTML = `
+          <td>${p.pid}</td>
+          <td>${p.at}</td>
+          <td>${p.bt}</td>
+          <td>${p.ct}</td>
+          <td>${tat}</td>
+          <td>${rt}</td>
+        `;
         outputTable.appendChild(row);
+        results.push({pid: p.pid, at: p.at, bt: p.bt, ct: p.ct, tat, rt});
         time = endTime;
-        setTimeout(scheduleNext, 1000);
+        if (queue.length > 0 || index < processes.length) {
+          time += contextSwitchDelay / 1000; // Add context switch delay in seconds
+        }
+        setTimeout(scheduleNext, 1000 + contextSwitchDelay);
       }
       scheduleNext();
     }
 
-    function runSJF(processes) {
+    function runSJF(processes, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const outputTable = document.querySelector("#outputTable tbody");
@@ -342,6 +473,7 @@
       let totalRT = 0;
       let n = processes.length;
       let isDone = Array(n).fill(false);
+      let results = [];
       function scheduleNext() {
         if (simulationStopped) return;
         let idx = -1;
@@ -356,6 +488,12 @@
           if (completed === n) {
             document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
             document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
+            lastSimulationData = {
+              gantt: gantt.innerHTML,
+              table: results,
+              avgTAT: (totalTAT / n).toFixed(2),
+              avgRT: (totalRT / n).toFixed(2)
+            };
             return;
           }
           time++;
@@ -366,19 +504,14 @@
         const startTime = Math.max(time, p.at);
         const endTime = startTime + p.bt;
         p.ct = endTime;
-        p.startTime = startTime; // Store the actual start time
+        p.startTime = startTime;
         const tat = p.ct - p.at;
         const rt = p.startTime - p.at;
         totalTAT += tat;
         totalRT += rt;
         isDone[idx] = true;
         completed++;
-        const ganttBlock = document.createElement("div");
-        ganttBlock.className = "gantt-bar";
-        ganttBlock.textContent = p.pid;
-        ganttBlock.style.backgroundColor = getColorForPID(p.pid);
-        ganttBlock.style.width = (p.bt * 30) + "px";
-        gantt.appendChild(ganttBlock);
+        addGanttBlock(gantt, p.pid, p.bt, endTime);
         logExec(`Process ${p.pid} started at time ${startTime}, completed at ${endTime}`);
         current.innerHTML = "";
         const label = document.createElement("div");
@@ -390,15 +523,26 @@
         current.appendChild(label);
         current.appendChild(bar);
         const row = document.createElement("tr");
-        row.innerHTML = `<td>${p.pid}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.ct}</td><td>${tat}</td><td>${rt}</td>`;
+        row.innerHTML = `
+          <td>${p.pid}</td>
+          <td>${p.at}</td>
+          <td>${p.bt}</td>
+          <td>${p.ct}</td>
+          <td>${tat}</td>
+          <td>${rt}</td>
+        `;
         outputTable.appendChild(row);
+        results.push({pid: p.pid, at: p.at, bt: p.bt, ct: p.ct, tat, rt});
         time = endTime;
-        setTimeout(scheduleNext, 1000);
+        if (completed < n) { // Only add delay if not all processes are done
+          time += contextSwitchDelay / 1000;
+        }
+        setTimeout(scheduleNext, 1000 + contextSwitchDelay);
       }
       scheduleNext();
     }
 
-    function runSRTF(processes) {
+    function runSRTF(processes, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const outputTable = document.querySelector("#outputTable tbody");
@@ -409,30 +553,70 @@
       let totalRT = 0;
       let isStarted = Array(n).fill(false);
       let isDone = Array(n).fill(false);
+      let results = [];
       let lastPid = null;
+      let lastBlock = null;
+
+      // Helper to compare PIDs (assume format 'P1', 'P2', ...)
+      function pidToNum(pid) {
+        return parseInt(pid.replace(/\D/g, "")) || 0;
+      }
+
       function scheduleNext() {
         if (simulationStopped) return;
-        let idx = -1;
-        let minRem = Infinity;
+        // Find all ready processes (arrived, not done, remaining > 0)
+        let ready = [];
         for (let i = 0; i < n; i++) {
           if (!isDone[i] && processes[i].at <= time && processes[i].remaining > 0) {
-            if (processes[i].remaining < minRem) {
-              minRem = processes[i].remaining;
-              idx = i;
-            }
+            ready.push(i);
           }
         }
-        if (idx === -1) {
+        if (ready.length === 0) {
           if (completed === n) {
             document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
             document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
+            lastSimulationData = {
+              gantt: gantt.innerHTML,
+              table: results,
+              avgTAT: (totalTAT / n).toFixed(2),
+              avgRT: (totalRT / n).toFixed(2)
+            };
             return;
           }
-          time++;
-          setTimeout(scheduleNext, 200);
+          // --- IDLE handling: advance to next arrival ---
+          // Find the next arrival time for any process not yet completed
+          let nextArrival = Infinity;
+          for (let i = 0; i < n; i++) {
+            if (!isDone[i] && processes[i].at > time) {
+              nextArrival = Math.min(nextArrival, processes[i].at);
+            }
+          }
+          if (nextArrival === Infinity) {
+            // No more arrivals, just increment time
+            time++;
+            setTimeout(scheduleNext, 200);
+            return;
+          }
+          // Record IDLE period in Gantt chart
+          const idleLength = nextArrival - time;
+          addGanttBlock(gantt, 'IDLE', idleLength, nextArrival);
+          logExec(`CPU IDLE from time ${time} to ${nextArrival}`);
+          current.innerHTML = "";
+          time = nextArrival;
+          setTimeout(scheduleNext, 300);
           return;
         }
+        // Sort ready processes by remaining time, then arrival time, then PID
+        ready.sort((ia, ib) => {
+          const a = processes[ia];
+          const b = processes[ib];
+          if (a.remaining !== b.remaining) return a.remaining - b.remaining;
+          if (a.at !== b.at) return a.at - b.at;
+          return pidToNum(a.pid) - pidToNum(b.pid);
+        });
+        const idx = ready[0];
         const p = processes[idx];
+        // Mark first start time for response time
         if (!isStarted[idx]) {
           p.startTime = time;
           isStarted[idx] = true;
@@ -440,15 +624,40 @@
         } else if (lastPid !== p.pid) {
           logExec(`Process ${lastPid} preempted at time ${time}, ${p.pid} started`);
         }
+        // Gantt chart block logic
         if (lastPid !== p.pid) {
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time;
+          }
+          const ganttWrapper = document.createElement("div");
+          ganttWrapper.className = "gantt-bar-wrapper";
+          ganttWrapper.style.width = "30px";
+          ganttWrapper.style.position = "relative";
+          ganttWrapper.style.display = "inline-block";
+          ganttWrapper.style.verticalAlign = "top";
           const ganttBlock = document.createElement("div");
           ganttBlock.className = "gantt-bar";
           ganttBlock.textContent = p.pid;
           ganttBlock.style.backgroundColor = getColorForPID(p.pid);
-          ganttBlock.style.width = "30px";
-          gantt.appendChild(ganttBlock);
+          ganttBlock.style.width = "100%";
+          ganttWrapper.appendChild(ganttBlock);
+          // Time label at right edge, initially empty, will be set on preemption or completion
+          const timeLabel = document.createElement("div");
+          timeLabel.className = "gantt-time-label";
+          timeLabel.textContent = "";
+          timeLabel.style.right = "0";
+          timeLabel.style.left = "auto";
+          timeLabel.style.width = "max-content";
+          timeLabel.style.position = "absolute";
+          timeLabel.style.bottom = "-18px";
+          timeLabel.style.transform = "none";
+          timeLabel.style.textAlign = "right";
+          ganttWrapper.appendChild(timeLabel);
+          gantt.appendChild(ganttWrapper);
           lastPid = p.pid;
+          lastBlock = ganttWrapper;
         }
+        // Update current process display
         current.innerHTML = "";
         const label = document.createElement("div");
         label.className = "bar-label";
@@ -458,6 +667,7 @@
         bar.textContent = p.pid;
         current.appendChild(label);
         current.appendChild(bar);
+        // Execute for 1 time unit
         p.remaining--;
         if (p.remaining === 0) {
           p.ct = time + 1;
@@ -466,19 +676,30 @@
           totalTAT += tat;
           totalRT += rt;
           const row = document.createElement("tr");
-          row.innerHTML = `<td>${p.pid}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.ct}</td><td>${tat}</td><td>${rt}</td>`;
+          row.innerHTML = `
+            <td>${p.pid}</td>
+            <td>${p.at}</td>
+            <td>${p.bt}</td>
+            <td>${p.ct}</td>
+            <td>${tat}</td>
+            <td>${rt}</td>
+          `;
           outputTable.appendChild(row);
           isDone[idx] = true;
           completed++;
           logExec(`Process ${p.pid} completed at time ${time + 1}`);
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time + 1;
+            lastBlock = null;
+          }
         }
         time++;
-        setTimeout(scheduleNext, 300);
+        setTimeout(scheduleNext, 300 + contextSwitchDelay);
       }
       scheduleNext();
     }
 
-    function runRR(processes, quantum) {
+    function runRR(processes, quantum, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const outputTable = document.querySelector("#outputTable tbody");
@@ -491,6 +712,10 @@
       let totalTAT = 0;
       let totalRT = 0;
       let lastPid = null;
+      let lastBlock = null;
+      let lastProcessCompleted = false; // Track if the last process completed
+      let results = [];
+      
       function scheduleNext() {
         if (simulationStopped) return;
         for (let i = 0; i < n; i++) {
@@ -503,6 +728,12 @@
           if (completed === n) {
             document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
             document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
+            lastSimulationData = {
+              gantt: gantt.innerHTML,
+              table: results,
+              avgTAT: (totalTAT / n).toFixed(2),
+              avgRT: (totalRT / n).toFixed(2)
+            };
             return;
           }
           time++;
@@ -515,17 +746,40 @@
           p.startTime = time;
           isStarted[idx] = true;
           logExec(`Process ${p.pid} started at time ${time}`);
-        } else if (lastPid !== p.pid) {
-          logExec(`Process ${lastPid} preempted at time ${time}, ${p.pid} started`);
+        } else if (lastPid !== p.pid && !lastProcessCompleted) {
+          logExec(`Process ${lastPid} preempted at time ${time}, ${p.pid} resumed`);
         }
         if (lastPid !== p.pid) {
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time;
+          }
+          const ganttWrapper = document.createElement("div");
+          ganttWrapper.className = "gantt-bar-wrapper";
+          ganttWrapper.style.width = "30px";
+          ganttWrapper.style.position = "relative";
+          ganttWrapper.style.display = "inline-block";
+          ganttWrapper.style.verticalAlign = "top";
           const ganttBlock = document.createElement("div");
           ganttBlock.className = "gantt-bar";
           ganttBlock.textContent = p.pid;
           ganttBlock.style.backgroundColor = getColorForPID(p.pid);
-          ganttBlock.style.width = "30px";
-          gantt.appendChild(ganttBlock);
+          ganttBlock.style.width = "100%";
+          ganttWrapper.appendChild(ganttBlock);
+          // Time label at right edge, initially empty, will be set on preemption or completion
+          const timeLabel = document.createElement("div");
+          timeLabel.className = "gantt-time-label";
+          timeLabel.textContent = "";
+          timeLabel.style.right = "0";
+          timeLabel.style.left = "auto";
+          timeLabel.style.width = "max-content";
+          timeLabel.style.position = "absolute";
+          timeLabel.style.bottom = "-18px";
+          timeLabel.style.transform = "none";
+          timeLabel.style.textAlign = "right";
+          ganttWrapper.appendChild(timeLabel);
+          gantt.appendChild(ganttWrapper);
           lastPid = p.pid;
+          lastBlock = ganttWrapper;
         }
         current.innerHTML = "";
         const label = document.createElement("div");
@@ -554,19 +808,32 @@
           totalTAT += tat;
           totalRT += rt;
           const row = document.createElement("tr");
-          row.innerHTML = `<td>${p.pid}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.ct}</td><td>${tat}</td><td>${rt}</td>`;
+          row.innerHTML = `
+            <td>${p.pid}</td>
+            <td>${p.at}</td>
+            <td>${p.bt}</td>
+            <td>${p.ct}</td>
+            <td>${tat}</td>
+            <td>${rt}</td>
+          `;
           outputTable.appendChild(row);
           completed++;
           logExec(`Process ${p.pid} completed at time ${time}`);
+          lastProcessCompleted = true; // Mark that this process completed
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time;
+            lastBlock = null;
+          }
         } else {
           queue.push(idx);
+          lastProcessCompleted = false; // Mark that this process was preempted
         }
         setTimeout(scheduleNext, 500);
       }
       scheduleNext();
     }
 
-    function runMLFQ(processes, quantums, allotments) {
+    function runMLFQ(processes, quantums, allotments, contextSwitchDelay) {
       const gantt = document.getElementById("ganttChart");
       const current = document.getElementById("currentProcessBar");
       const outputTable = document.querySelector("#outputTable tbody");
@@ -579,6 +846,8 @@
       let totalTAT = 0;
       let totalRT = 0;
       let lastPid = null;
+      let lastBlock = null;
+      let results = [];
 
       // For each process, track: current queue, remaining allotment per queue, and if it's in any queue
       let procState = processes.map((p, i) => ({
@@ -629,6 +898,12 @@
           if (completed === n) {
             document.getElementById("avgTAT").textContent = (totalTAT / n).toFixed(2);
             document.getElementById("avgRT").textContent = (totalRT / n).toFixed(2);
+            lastSimulationData = {
+              gantt: gantt.innerHTML,
+              table: results,
+              avgTAT: (totalTAT / n).toFixed(2),
+              avgRT: (totalRT / n).toFixed(2)
+            };
             logExec(`=== SIMULATION COMPLETE ===`);
             logExec(`Total TAT: ${totalTAT}, Total RT: ${totalRT}, Processes: ${n}`);
             logExec(`Average TAT: ${(totalTAT / n).toFixed(2)}, Average RT: ${(totalRT / n).toFixed(2)}`);
@@ -654,13 +929,36 @@
 
         // Create Gantt block
         if (lastPid !== p.pid) {
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time;
+          }
+          const ganttWrapper = document.createElement("div");
+          ganttWrapper.className = "gantt-bar-wrapper";
+          ganttWrapper.style.width = "30px";
+          ganttWrapper.style.position = "relative";
+          ganttWrapper.style.display = "inline-block";
+          ganttWrapper.style.verticalAlign = "top";
           const ganttBlock = document.createElement("div");
           ganttBlock.className = "gantt-bar";
           ganttBlock.textContent = p.pid + "(Q" + level + ")";
           ganttBlock.style.backgroundColor = getColorForPID(p.pid);
-          ganttBlock.style.width = "30px";
-          gantt.appendChild(ganttBlock);
+          ganttBlock.style.width = "100%";
+          ganttWrapper.appendChild(ganttBlock);
+          // Time label at right edge, initially empty, will be set on preemption or completion
+          const timeLabel = document.createElement("div");
+          timeLabel.className = "gantt-time-label";
+          timeLabel.textContent = "";
+          timeLabel.style.right = "0";
+          timeLabel.style.left = "auto";
+          timeLabel.style.width = "max-content";
+          timeLabel.style.position = "absolute";
+          timeLabel.style.bottom = "-18px";
+          timeLabel.style.transform = "none";
+          timeLabel.style.textAlign = "right";
+          ganttWrapper.appendChild(timeLabel);
+          gantt.appendChild(ganttWrapper);
           lastPid = p.pid;
+          lastBlock = ganttWrapper;
         }
 
         // Update current process display
@@ -716,10 +1014,21 @@
           totalRT += rt;
 
           const row = document.createElement("tr");
-          row.innerHTML = `<td>${p.pid}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.ct}</td><td>${tat}</td><td>${rt}</td>`;
+          row.innerHTML = `
+            <td>${p.pid}</td>
+            <td>${p.at}</td>
+            <td>${p.bt}</td>
+            <td>${p.ct}</td>
+            <td>${tat}</td>
+            <td>${rt}</td>
+          `;
           outputTable.appendChild(row);
           completed++;
           logExec(`Process ${p.pid} completed at time ${time} - TAT: ${tat}, RT: ${rt} (First start: ${procState[idx].firstStartTime})`);
+          if (lastBlock) {
+            lastBlock.querySelector('.gantt-time-label').textContent = time;
+            lastBlock = null;
+          }
         } else if (level < 4 && procState[idx].allotment[level] === 0) {
           // Allotment exhausted, demote to next queue
           const nextLevel = level + 1;
@@ -762,6 +1071,70 @@
       }, 200);
     }
 
+    function exportResults() {
+      const format = document.getElementById("exportFormat").value;
+      if (!lastSimulationData) {
+        alert("Please run a simulation first.");
+        return;
+      }
+      if (format === "csv") {
+        exportCSV(lastSimulationData);
+      } else if (format === "txt") {
+        exportTXT(lastSimulationData);
+      } else if (format === "img") {
+        exportImage();
+      }
+    }
+
+    function exportCSV(data) {
+      let csv = 'PID,AT,BT,CT,TAT,RT\n';
+      data.table.forEach(row => {
+        csv += `${row.pid},${row.at},${row.bt},${row.ct},${row.tat},${row.rt}\n`;
+      });
+      csv += `Average TAT,${data.avgTAT}\nAverage RT,${data.avgRT}\n`;
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'simulation_results.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function exportTXT(data) {
+      let txt = 'CPU Scheduling Simulation Results\n\n';
+      txt += 'PID\tAT\tBT\tCT\tTAT\tRT\n';
+      data.table.forEach(row => {
+        txt += `${row.pid}\t${row.at}\t${row.bt}\t${row.ct}\t${row.tat}\t${row.rt}\n`;
+      });
+      txt += `\nAverage TAT: ${data.avgTAT}\nAverage RT: ${data.avgRT}\n`;
+      const blob = new Blob([txt], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'simulation_results.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function exportImage() {
+      const ganttBox = document.querySelector('.gantt-chart-box');
+      if (window.html2canvas) {
+        html2canvas(ganttBox).then(canvas => {
+          const link = document.createElement('a');
+          link.download = 'gantt_chart.png';
+          link.href = canvas.toDataURL();
+          link.click();
+        });
+      } else {
+        alert('Image export requires html2canvas library.');
+      }
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("numProcesses").addEventListener("input", toggleInputType);
       document.querySelectorAll('input[name="inputType"]').forEach(radio => {
@@ -770,5 +1143,6 @@
       toggleInputType();
     });
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </body>
 </html> 
