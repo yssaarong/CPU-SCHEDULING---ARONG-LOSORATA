@@ -3,6 +3,7 @@
 – Role Distribution –
 
 Task                                                                        	Assigned To
+
 Initial JAVA code (for structure)                                            	Losorata
 HTML Structure (form layout, input sections, output tables)	                  Losorata
 CSS Styling (color theme, layout responsiveness, element spacing)	            Arong
